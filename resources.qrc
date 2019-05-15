@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/plugins/UTM2Cassin" >
+        <file>icon.png</file>
+    </qresource>
+</RCC>
