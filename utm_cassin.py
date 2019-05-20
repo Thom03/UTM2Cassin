@@ -51,7 +51,7 @@ Cassini_UTM_Params = "CASSINI_to_UTM_with_sheetno.csv"
 UTM_Cassini_Params = "UTM_to_CASSINI_with_sheetno.csv"
 
 all_csv = [Cassini_SheetNo_Id, UTM_SheetNo_Id, Cassini_UTM_Params,
-UTM_Cassini_Params]
+           UTM_Cassini_Params]
 C_S_I = []
 U_S_I = []
 C_U_P = []
@@ -72,7 +72,6 @@ for fyl in all_csv:
             if your_list[0] != k and fyl == UTM_Cassini_Params:
                 U_C_P.append(k)
 
-
 new_coords = []
 ref = ""
 shp_name = ""
@@ -84,11 +83,6 @@ cas_n = ""
 sn = ""
 utm_e = ""
 utm_n = ""
-
-
-
-""
-""
 
 
 class UTM2Cassin:
@@ -126,6 +120,21 @@ class UTM2Cassin:
         # TODO: We are going to let the user set this up in a future iteration
         self.toolbar = self.iface.addToolBar(u'UTM2Cassin')
         self.toolbar.setObjectName(u'UTM2Cassin')
+
+        self.dlg = UTM2CassinDialog()
+
+        # DI - Give the widget tools in the interface functionality on any changes made by user
+
+        self.dlg.txtOutput.clear()
+        self.dlg.btnOutput.clicked.connect(self.select_output_file)
+
+        self.dlg.chkSelect.stateChanged.connect(self.state_changed_Select)
+        self.dlg.chkLoad.stateChanged.connect(self.state_changed_Load)
+
+        self.dlg.cboLayer.currentIndexChanged.connect(self.cbo_state_changed)
+
+        self.dlg.txtInput.clear()
+        self.dlg.btnInput.clicked.connect(self.select_input_file)
 
     # noinspection PyMethodMayBeStatic
     def tr(self, message):
@@ -193,7 +202,7 @@ class UTM2Cassin:
         """
 
         # Create the dialog (after translation) and keep reference
-        self.dlg = UTM2CassinDialog()
+        # self.dlg = UTM2CassinDialog()
 
         icon = QIcon(icon_path)
         action = QAction(icon, text, parent)
@@ -239,13 +248,168 @@ class UTM2Cassin:
         del self.toolbar
 
     def run(self):
+        global layers
         """Run method that performs all the real work"""
+        layers = self.iface.legendInterface().layers()
+        layer_list = []
+        for layer in layers:
+            if layer.type() == QgsMapLayer.VectorLayer and layer.geometryType() == QGis.Point:
+                layer_list.append(layer.name())
+        self.dlg.cboLayer.clear()
+        self.dlg.cboLayer.addItems(layer_list)
         # show the dialog
         self.dlg.show()
         # Run the dialog event loop
         result = self.dlg.exec_()
         # See if OK was pressed
         if result:
+            # DI - get the processed input and output names including spatial
+
+            # and the processed coordinates. oncanvas is a boolean value which
+            out_name, new_coords, shp_name, ref, oncanvas = self.check_projection_stuff()
             # Do something useful here - delete the line containing pass and
             # substitute with your code.
-            pass
+            # DI - If the input and output files are valid and the processed coordinates are found, proceed
+
+            if out_name != "" and new_coords != [] and shp_name != "":
+                driver = ogr.GetDriverByName("ESRI Shapefile")
+                data_source = driver.CreateDataSource(out_name)
+                lyrname = out_name.split("/")[-1:][0][:-4].encode('utf-8')
+                layerx = data_source.CreateLayer(lyrname, None, ogr.wkbPoint)
+
+                field_name = ogr.FieldDefn("Name", ogr.OFTString)
+                field_name.SetWidth(10)
+                layerx.CreateField(field_name)
+                layerx.CreateField(ogr.FieldDefn("Northing", ogr.OFTReal))
+
+                # DI - we fill up the fields and create a geometry for each point in the layer
+
+                n = 0
+                for x in new_coords:
+                    n = n + 1
+                    feat_name = "Point_" + str(n)
+                    feature = ogr.Feature(layerx.GetLayerDefn())
+                    feature.SetField("Name", feat_name)
+                    feature.SetField("Northing", x[1])
+                    feature.SetField("Easting", x[0])
+                    wkt = "POINT(%f %f)" % (x[0], x[1])
+                    point = ogr.CreateGeometryFromWkt(wkt)
+                    feature.SetGeometry(point)
+                    layerx.CreateFeature(feature)
+                    feature = None
+
+                data_source = None
+                # DI - Add map to canvas if oncanvas is true
+                if oncanvas:
+                    layera = self.iface.addVectorLayer(out_name, lyrname, "ogr")
+
+                    if not layera:
+                        self.iface.messageBar().pushMessage("Error", "Layer failed to load!",
+                                                            level=QgsMessageBar.WARNING, duration=3)
+
+                else:
+                    self.iface.messageBar().pushMessage("Error", "Something went wrong", level=QgsMessageBar.WARNING,
+                                                        duration=3)
+                    self.iface.messageBar().pushMessage("Progress", "Conversion completed", level=QgsMessageBar.INFO,
+                                                        duration=3)
+
+                    layer_list = []
+
+            # DI - Get the output file path and add to line Edit field
+
+    def select_output_file(self):
+        filename_out = QFileDialog.getSaveFileName(self.dlg, "Specify output file", "", '*.shp')
+        if filename_out:
+            self.dlg.txtOuput.setText(filename_out)
+            # DI - If browse button was used to select input file, disable the combo box and vice versa
+
+    def state_changed_Select(self, int):
+        if self.dlg.chkSelect.isChecked():
+            self.dlg.btnInput.setEnabled(True)
+
+            self.dlg.txtInput.setEnabled(True)
+            self.dlg.cboLayer.setEnabled(False)
+            self.dlg.txtInput.clear()
+        else:
+            self.dlg.btnInput.setEnabled(False)
+            self.dlg.txtInput.setEnabled(False)
+            self.dlg.cboLayer.setEnabled(True)
+            self.dlg.txtInput.clear()
+
+    # DI - If output to be shown on map, oncanvas is true
+    def state_changed_Load(self, int):
+        global oncanvas
+        if self.dlg.chkLoad.isChecked():
+            oncanvas = True
+        else:
+            oncanvas = False
+
+    # DI - Select the input shapefile via browse button
+    def select_input_file(self):
+        filename_in = QFileDialog.getOpenFileName(self.dlg, "Select input file ", "", '*.shp')
+
+        vLayer = QgsVectorLayer(filename_in, QFileInfo(filename_in).baseName(), "ogr")
+        layerGeometry = vLayer.geometryType()
+        if filename_in and layerGeometry == QGis.Point:
+            self.dlg.txtInput.setText(filename_in)
+            out_name, new_coords, shp_name, ref, oncanvas = self.check_projection_stuff()
+        else:
+            self.iface.messageBar().pushMessage("Input Type", "Please select a point shapefile",
+                                                level=QgsMessageBar.WARNING, duration=3)
+
+    # DI - Check if a new layer has been selected in combo box
+    def cb0_state_changed(self):
+        out_name, new_coords, shp_name, ref, oncanvas = self.check_projection_stuff()
+
+    def check_projection_stuff(self):
+
+        global new_coords
+        global ref
+        global shp_name
+        global out_name
+        global oncanvas
+
+        self.dlg.lblTransformation.clear()
+        self.dlg.lstToposheet.clear()
+        new_coords = []
+        ref = ""
+        shp_name = ""
+        oncanvas = False
+        out_name = ""
+        cas_e = ""
+        cas_n = ""
+        sn = ""
+        utm_e = ""
+        utm_n =""
+        yote_poa = False
+
+        if self.dlg.chkSelect.isChecked():
+            shp_name = self.dlg.txtInput.text()
+        else:
+            selectedLayerIndex = self.dlg.cboLayer.currentIndex()
+            selectedLayer = layers[selectedLayerIndex]
+            shp_name = selectedLayer.source()
+
+         out_name = self.dlg.txtOutput.text()
+
+        # DI - open the input file and get the spatial reference if any
+
+        infile = ogr.Open(shp_name)
+        layer = infile.GetLayer()
+        ref = layer.GetSpatialRef()
+
+        # DI - get the coordinates of each point in the layer
+        old_coords = []
+        for feature in layer:
+            sas = json.loads(feature.ExportToJson())['geometry']['coordinates']
+            old_coords.append(sas)
+
+        new_coords = []
+        sheet_list = []
+        mode_list = []
+
+
+
+
+
+        pass
